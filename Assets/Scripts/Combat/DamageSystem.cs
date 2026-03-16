@@ -16,6 +16,22 @@ namespace KotORUnity.Combat
     /// </summary>
     public static class DamageSystem
     {
+        // ── CACHED REFERENCES ─────────────────────────────────────────────────
+        // FindObjectOfType is expensive — cache the result and refresh only when null.
+        private static ModeSwitchSystem _cachedMSS;
+        private static ModeSwitchSystem GetModeSwitchSystem()
+        {
+            if (_cachedMSS == null)
+                _cachedMSS = Object.FindObjectOfType<ModeSwitchSystem>();
+            return _cachedMSS;
+        }
+
+        /// <summary>
+        /// Call this when a scene is unloaded so the cache is cleared.
+        /// Hooked via GameManager.OnModuleLoaded.
+        /// </summary>
+        public static void InvalidateCache() => _cachedMSS = null;
+
         // ── CORE APPLY DAMAGE ──────────────────────────────────────────────────
         /// <summary>
         /// Apply damage from a source to a target.
@@ -36,7 +52,7 @@ namespace KotORUnity.Combat
 
             // Apply mode switch vulnerability if target is the player
             float finalDamage = baseDamage;
-            var modeSwitchSystem = Object.FindObjectOfType<ModeSwitchSystem>();
+            var modeSwitchSystem = GetModeSwitchSystem();
             if (modeSwitchSystem != null && modeSwitchSystem.IsVulnerable
                 && IsPlayerCharacter(target))
             {

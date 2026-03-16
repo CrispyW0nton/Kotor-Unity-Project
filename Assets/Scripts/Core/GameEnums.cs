@@ -59,7 +59,9 @@ namespace KotORUnity.Core
             Ranged,
             Force,
             Utility,
-            Passive
+            Passive,
+            Grenade,
+            Consumable
         }
 
         /// <summary>How an ability behaves when queued in RTS vs executed in Action.</summary>
@@ -93,7 +95,8 @@ namespace KotORUnity.Core
             Suppress,
             Execute,
             Retreat,
-            Dead
+            Dead,
+            Idle       // used by Stun coroutine in EnemyAI
         }
 
         // ── COMPANION AI TIER ──────────────────────────────────────────────────

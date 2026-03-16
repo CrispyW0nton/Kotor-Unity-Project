@@ -76,11 +76,80 @@ namespace KotORUnity.Core
 
             // Pause
             GamePaused,
-            GameResumed
+            GameResumed,
+
+            // Dialogue
+            DialogueStarted,
+            DialogueEnded,
+            DialogueLineAdvanced,
+
+            // Inventory
+            ItemEquipped,
+            ItemUnequipped,
+            ItemPickedUp,
+            ItemDropped,
+            ItemUsed,
+
+            // Area / World
+            AreaTransitionRequested,
+            AreaTransitionCompleted,
+
+            // Combat (RTWP)
+            CombatRoundStarted,
+            CombatRoundEnded,
+            ActionQueueChanged,
+
+            // Progression / XP (alias used by DevConsole)
+            XPAwarded,
+
+            // Mod system
+            ModsLoaded,
+
+            // Dev tools
+            GodModeChanged,
+            HUDVisibilityChanged,
+
+            // Achievements + Codex
+            AchievementUnlocked,
+            CodexEntryDiscovered,
+
+            // Force / Alignment
+            AlignmentChanged,
+            ForcePowerActivated,
+            ForcePointsChanged,
+
+            // Items / Loot
+            LootDropped,
+            LootCollected,
+
+            // Merchant
+            ItemPurchased,
+            ItemSold,
+
+            // Interaction
+            WorkbenchOpened,
+            ContainerOpened,
+            DoorOpened,
+            DoorLocked,
+            NPCInteracted,
+
+            // Area
+            NavMeshBaked,
+            SpawnPointReached,
+
+            // Dialogue (additional – DialogueStarted/Ended declared in UI section above)
+            DialogueReplyChosen
         }
 
         // ── BASE EVENT ARGS ────────────────────────────────────────────────────
-        public class GameEventArgs : EventArgs { }
+        public class GameEventArgs : EventArgs
+        {
+            // Generic payload fields — not all events use all fields
+            public int    IntValue    = 0;
+            public float  FloatValue  = 0f;
+            public bool   BoolValue   = false;
+            public string StringValue = "";
+        }
 
         // ── SPECIFIC EVENT ARGS ────────────────────────────────────────────────
 
@@ -131,8 +200,91 @@ namespace KotORUnity.Core
 
         public class ModuleEventArgs : GameEventArgs
         {
-            public string ModuleName { get; }
-            public ModuleEventArgs(string name) { ModuleName = name; }
+            public string ModuleName  { get; }
+            public string WaypointTag { get; }
+            public ModuleEventArgs(string name) { ModuleName = name; WaypointTag = ""; }
+            public ModuleEventArgs(string name, string waypoint) { ModuleName = name; WaypointTag = waypoint; }
+        }
+
+        public class AbilityEventArgs : GameEventArgs
+        {
+            public GameObject Caster { get; }
+            public GameObject Target { get; }
+            public string AbilityName { get; }
+            public GameMode ExecutionMode { get; }
+            public AbilityEventArgs(GameObject caster, GameObject target, string abilityName, GameMode mode)
+            {
+                Caster = caster; Target = target; AbilityName = abilityName; ExecutionMode = mode;
+            }
+        }
+
+        /// <summary>Published when an achievement is unlocked.</summary>
+        public class AchievementEventArgs : GameEventArgs
+        {
+            public string AchievementId    { get; }
+            public string AchievementTitle { get; }
+            public int    PointValue       { get; }
+            public AchievementEventArgs(string id, string title, int pts)
+            { AchievementId = id; AchievementTitle = title; PointValue = pts; }
+        }
+
+        /// <summary>Published when a Codex entry is first discovered.</summary>
+        public class CodexEventArgs : GameEventArgs
+        {
+            public string EntryId    { get; }
+            public string EntryTitle { get; }
+            public string Category   { get; }
+            public CodexEventArgs(string id, string title, string cat)
+            { EntryId = id; EntryTitle = title; Category = cat; }
+        }
+
+        /// <summary>Published when Force alignment changes.</summary>
+        public class ForcePowerEventArgs : GameEventArgs
+        {
+            public int   Alignment      { get; }  // -100 dark .. +100 light
+            public float ForceCurrent   { get; }
+            public float ForceMax       { get; }
+            public string PowerName     { get; }
+            public ForcePowerEventArgs(int align, float fp, float maxFp, string power = "")
+            { Alignment = align; ForceCurrent = fp; ForceMax = maxFp; PowerName = power; }
+        }
+
+        /// <summary>Published when the player's alignment shifts (light/dark).</summary>
+        public class AlignmentEventArgs : GameEventArgs
+        {
+            public int NewAlignment  { get; }  // -100 (dark) … +100 (light)
+            public int Delta         { get; }  // positive = more light, negative = more dark
+            public AlignmentEventArgs(int newAlign, int delta) { NewAlignment = newAlign; Delta = delta; }
+        }
+
+        /// <summary>Published when an item is picked up (looted or purchased).</summary>
+        public class ItemEventArgs : GameEventArgs
+        {
+            public string ResRef   { get; }
+            public string ItemName { get; }
+            public int    Credits  { get; }    // price paid / received (0 if looted)
+            public ItemEventArgs(string resRef, string name, int credits = 0)
+            { ResRef = resRef; ItemName = name; Credits = credits; }
+        }
+
+        /// <summary>Published when a loot item is dropped or collected.</summary>
+        public class LootEventArgs : GameEventArgs
+        {
+            public string ItemResRef { get; }
+            public int    Quantity   { get; }
+            public Vector3 WorldPos  { get; }
+            public LootEventArgs(string resRef, int qty, Vector3 pos)
+            { ItemResRef = resRef; Quantity = qty; WorldPos = pos; }
+        }
+
+        /// <summary>Published when a merchant transaction completes.</summary>
+        public class MerchantEventArgs : GameEventArgs
+        {
+            public string ItemResRef  { get; }
+            public int    Credits     { get; }
+            public bool   IsPurchase  { get; }  // true=buy, false=sell
+            public MerchantEventArgs(string resRef, int credits, bool isPurchase)
+            { ItemResRef = resRef; Credits = credits; IsPurchase = isPurchase; }
         }
 
         // ── INTERNAL REGISTRY ─────────────────────────────────────────────────

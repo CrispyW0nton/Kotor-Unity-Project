@@ -6,6 +6,7 @@ using KotORUnity.Core;
 using KotORUnity.Player;
 using KotORUnity.Abilities;
 using KotORUnity.Weapons;
+using KotORUnity.Combat;
 using static KotORUnity.Core.GameEnums;
 
 namespace KotORUnity.AI.Companion
@@ -53,12 +54,23 @@ namespace KotORUnity.AI.Companion
         [Header("Abilities")]
         [SerializeField] private List<AbilityBase> abilities = new List<AbilityBase>();
 
+        [Header("Force Powers")]
+        [Tooltip("HP % threshold below which companion uses a heal power on themselves")]
+        [SerializeField, Range(0f, 1f)] private float healSelfThreshold  = 0.35f;
+        [Tooltip("HP % threshold below which companion uses a heal power on the player")]
+        [SerializeField, Range(0f, 1f)] private float healAllyThreshold  = 0.40f;
+        [Tooltip("HP % threshold below which companion uses offensive Force powers")]
+        [SerializeField, Range(0f, 1f)] private float offensiveFPThreshold = 0.50f;
+        [Tooltip("Interval in seconds between Force power evaluations")]
+        [SerializeField] private float forcePowerEvalInterval = 2.5f;
+
         [Header("Weapon")]
         [SerializeField] private WeaponBase equippedWeapon;
 
         // ── COMPONENTS ─────────────────────────────────────────────────────────
         private NavMeshAgent _navAgent;
         private PlayerStats _stats;
+        private ForcePowerManager _forcePowers;  // may be null if not a Force-user
 
         // ── STATE ──────────────────────────────────────────────────────────────
         private CompanionBehaviorTier _currentTier = CompanionBehaviorTier.AutonomousAction;
@@ -68,19 +80,25 @@ namespace KotORUnity.AI.Companion
         private Vector3 _formationOffset;
 
         // Timers
-        private float _autoAttackTimer = 0f;
-        private float _coverUpdateTimer = 0f;
+        private float _autoAttackTimer    = 0f;
+        private float _coverUpdateTimer   = 0f;
+        private float _forcePowerEvalTimer= 0f;
         private Transform _currentCoverPosition;
+
+        // Stun support
+        private bool  _isStunned     = false;
+        private float _stunRemaining = 0f;
 
         // ── UNITY LIFECYCLE ────────────────────────────────────────────────────
         private void Awake()
         {
-            _navAgent = GetComponent<NavMeshAgent>();
-            _stats = GetComponent<PlayerStatsBehaviour>().Stats;
+            _navAgent   = GetComponent<NavMeshAgent>();
+            _stats      = GetComponent<PlayerStatsBehaviour>().Stats;
+            _forcePowers= GetComponent<ForcePowerManager>(); // may be null
             _orderQueue = new OrderQueue(this);
 
             EventBus.Subscribe(EventBus.EventType.ModeTransitionCompleted, OnModeChanged);
-            EventBus.Subscribe(EventBus.EventType.GamePaused, OnGamePaused);
+            EventBus.Subscribe(EventBus.EventType.GamePaused,  OnGamePaused);
             EventBus.Subscribe(EventBus.EventType.GameResumed, OnGameResumed);
         }
 
@@ -95,8 +113,24 @@ namespace KotORUnity.AI.Companion
         {
             if (!_stats.IsAlive) return;
 
-            _autoAttackTimer += Time.deltaTime;
-            _coverUpdateTimer += Time.deltaTime;
+            // Handle stun countdown
+            if (_isStunned)
+            {
+                _stunRemaining -= Time.deltaTime;
+                if (_stunRemaining <= 0f) _isStunned = false;
+                else return; // stunned: no actions
+            }
+
+            _autoAttackTimer     += Time.deltaTime;
+            _coverUpdateTimer    += Time.deltaTime;
+            _forcePowerEvalTimer += Time.deltaTime;
+
+            // Evaluate Force powers on a slower tick
+            if (_forcePowers != null && _forcePowerEvalTimer >= forcePowerEvalInterval)
+            {
+                _forcePowerEvalTimer = 0f;
+                EvaluateForcePowerUse();
+            }
 
             switch (_currentTier)
             {
@@ -252,6 +286,94 @@ namespace KotORUnity.AI.Companion
 
             if (dist > 3f) // Only reposition if more than 3m away
                 _navAgent.SetDestination(desiredPos);
+        }
+
+        // ── FORCE POWER AI ─────────────────────────────────────────────────────
+        private void EvaluateForcePowerUse()
+        {
+            if (_forcePowers == null || !_forcePowers.IsReady) return;
+
+            float selfHpPct  = _stats.CurrentHealth / _stats.MaxHealth;
+
+            // ── Priority 1: Heal self if critically wounded ────────────────────
+            if (selfHpPct < healSelfThreshold)
+            {
+                if (TryUseForcePower("force heal") || TryUseForcePower("cure")) return;
+            }
+
+            // ── Priority 2: Heal player if near death ─────────────────────────
+            var player = GameObject.FindWithTag("Player");
+            if (player != null)
+            {
+                var pStats = player.GetComponent<PlayerStatsBehaviour>()?.Stats;
+                if (pStats != null)
+                {
+                    float playerHpPct = pStats.CurrentHealth / pStats.MaxHealth;
+                    if (playerHpPct < healAllyThreshold)
+                    {
+                        if (TryUseForcePower("force heal", player) ||
+                            TryUseForcePower("cure",        player)) return;
+                    }
+                }
+            }
+
+            // ── Priority 3: Offensive powers if enemy is high-threat ──────────
+            if (_currentTarget != null)
+            {
+                var tStats = _currentTarget.GetComponent<PlayerStatsBehaviour>()?.Stats;
+                if (tStats != null)
+                {
+                    float targetHpPct = tStats.CurrentHealth / tStats.MaxHealth;
+                    // Use CC power on healthy enemies, damage power on weakened ones
+                    if (targetHpPct > offensiveFPThreshold)
+                    {
+                        if (TryUseForcePower("stasis",          _currentTarget)) return;
+                        if (TryUseForcePower("stasis field",    _currentTarget)) return;
+                    }
+                    else
+                    {
+                        if (TryUseForcePower("force lightning", _currentTarget)) return;
+                        if (TryUseForcePower("death field",     _currentTarget)) return;
+                        if (TryUseForcePower("drain life",      _currentTarget)) return;
+                    }
+                }
+
+                // ── Force push on any melee attacker that is very close ────────
+                if (Vector3.Distance(transform.position, _currentTarget.transform.position) < 3f)
+                {
+                    TryUseForcePower("force push", _currentTarget);
+                }
+            }
+
+            // ── Priority 4: Buff self if force valor or speed not active ──────
+            if (selfHpPct > 0.6f && _currentTarget != null)
+            {
+                TryUseForcePower("force speed");
+                TryUseForcePower("force valor");
+            }
+        }
+
+        /// <summary>
+        /// Try to use a Force power by label. Returns true if cast was successful.
+        /// </summary>
+        private bool TryUseForcePower(string powerLabel, GameObject target = null)
+        {
+            if (_forcePowers == null) return false;
+            var def = ForcePowerRegistry.GetByLabel(powerLabel);
+            if (def == null) return false;
+            return _forcePowers.UsePower(def.SpellId, target ?? gameObject);
+        }
+
+        /// <summary>
+        /// External call: this companion is ForcePowerManager.IsReady shorthand.
+        /// Also exposes stun support so Force Stasis can affect enemies.
+        /// </summary>
+        public void Stun(float duration)
+        {
+            _isStunned     = true;
+            _stunRemaining = Mathf.Max(_stunRemaining, duration);
+            if (_navAgent != null) _navAgent.isStopped = true;
+            Debug.Log($"[CompanionAI] {companionName} stunned for {duration:F1}s.");
         }
 
         // ── ORDER API (called by RTSPlayerController) ──────────────────────────

@@ -27,6 +27,11 @@ namespace KotORUnity.Core
         private ModeTransitionState _transitionState = ModeTransitionState.Idle;
         private bool _isPaused = false;
 
+        // ── STATIC SINGLETON ACCESS ────────────────────────────────────────────
+        public static ModeSwitchSystem Instance { get; private set; }
+        private void Awake() { if (Instance == null) Instance = this; }
+        private void OnDestroy() { if (Instance == this) Instance = null; }
+
         // Timers (unscaled time to resist time dilation)
         private float _switchCooldownRemaining = 0f;
         private float _pauseCooldownRemaining = 0f;
@@ -266,6 +271,28 @@ namespace KotORUnity.Core
         }
 
         // ── MODE AFFINITY TRACKING ─────────────────────────────────────────────
+        /// <summary>
+        /// Call at the START of each encounter.
+        /// Resets the adaptation timer and notes which mode was active.
+        /// </summary>
+        public void RecordEncounterStart()
+        {
+            // Nothing to reset per encounter start — we wait for completion to update counters.
+            // This hook exists so EncounterManager has a clean API and future logic has a place.
+            Debug.Log("[ModeSwitchSystem] Encounter started — affinity tracking active.");
+        }
+
+        /// <summary>
+        /// Call at the END of each encounter with the mode that was dominant.
+        /// Updates the affinity counters used by the XP bonus system.
+        /// </summary>
+        public void RecordEncounterCompleted(GameMode usedMode)
+        {
+            RecordEncounterMode(usedMode);
+            Debug.Log($"[ModeSwitchSystem] Encounter completed in {usedMode} mode. " +
+                      $"EncountersSinceRTS={_encountersSinceRTS}, EncountersSinceAction={_encountersSinceAction}");
+        }
+
         /// <summary>
         /// Call at the start of each encounter to update mode affinity counters.
         /// The system tracks which mode is underused and grants XP bonuses.

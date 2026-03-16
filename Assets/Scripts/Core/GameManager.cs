@@ -1,9 +1,12 @@
 using System;
+using System.Collections;
 using System.IO;
 using UnityEngine;
 using KotORUnity.Core;
+using KotORUnity.Bootstrap;
 using KotORUnity.KotOR.Modules;
 using static KotORUnity.Core.GameEnums;
+#pragma warning disable 0414, 0219
 
 namespace KotORUnity.Core
 {
@@ -74,13 +77,41 @@ namespace KotORUnity.Core
                 return;
             }
             Instance = this;
+            // Detach from parent so DontDestroyOnLoad works on nested GOs
+            if (transform.parent != null) transform.SetParent(null);
             DontDestroyOnLoad(gameObject);
-
-            InitializeSystems();
+            // Initialization is deferred to Start so SceneBootstrapper.Awake()
+            // has had a chance to run and write the KotorPath PlayerPrefs key.
         }
 
         private void Start()
         {
+            StartCoroutine(InitializeWhenReady());
+        }
+
+        /// <summary>
+        /// Wait for SceneBootstrapper to finish mounting archives, then initialize.
+        /// On the very first run PlayerPrefs won't have the key yet — we fall back to
+        /// polling SceneBootstrapper.IsReady or using the inspector kotorDir directly.
+        /// </summary>
+        private IEnumerator InitializeWhenReady()
+        {
+            // If SceneBootstrapper exists, wait until it has finished its BootRoutine.
+            if (SceneBootstrapper.Instance != null)
+            {
+                float timeout = 30f;
+                float elapsed = 0f;
+                while (!SceneBootstrapper.IsReady && elapsed < timeout)
+                {
+                    elapsed += Time.deltaTime;
+                    yield return null;
+                }
+                if (!SceneBootstrapper.IsReady)
+                    Debug.LogWarning("[GameManager] SceneBootstrapper did not become ready within 30 s — proceeding anyway.");
+            }
+
+            InitializeSystems();
+
             if (_isInitialized)
                 LoadEntryModule();
         }
@@ -137,6 +168,19 @@ namespace KotORUnity.Core
         /// <summary>Validate that the KotOR installation directory exists and contains expected files.</summary>
         private bool ValidateKotorDirectory()
         {
+            // If the inspector field is empty, try to inherit the path that
+            // SceneBootstrapper already resolved (it reads PlayerPrefs / auto-detect).
+            if (string.IsNullOrEmpty(kotorDir))
+            {
+                // SceneBootstrapper stores the resolved path in PlayerPrefs key "KotorPath"
+                string bootstrapPath = PlayerPrefs.GetString("KotorPath", "");
+                if (!string.IsNullOrEmpty(bootstrapPath))
+                {
+                    kotorDir = bootstrapPath;
+                    Debug.Log($"[GameManager] kotorDir inherited from SceneBootstrapper: '{kotorDir}'");
+                }
+            }
+
             if (string.IsNullOrEmpty(kotorDir)) return false;
             if (!Directory.Exists(kotorDir)) return false;
 
@@ -178,6 +222,34 @@ namespace KotORUnity.Core
 
             entryModule = moduleName;
             _moduleLoader.LoadModule(moduleName);
+        }
+
+        /// <summary>
+        /// Begin a brand-new game from a <see cref="UI.NewGameConfig"/> produced by
+        /// <see cref="UI.CharacterCreationController"/>.
+        ///
+        /// Flow:
+        ///   1. Apply character config to PlayerStats / LevelSystem.
+        ///   2. Save to the chosen slot (slot 0 = auto-save for new game).
+        ///   3. Load the entry module.
+        /// </summary>
+        public void StartNewGame(UI.NewGameConfig config,
+                                 SaveSlot slot = SaveSlot.Manual1)
+        {
+            Debug.Log($"[GameManager] StartNewGame — name={config.PlayerName} class={config.ClassId} slot={slot}");
+
+            // Apply stats
+            var levelSys = FindObjectOfType<Progression.LevelSystem>();
+            if (levelSys != null)
+                levelSys.InitialiseFromConfig(config);
+
+            // Initial save to chosen slot
+            var saveMgr = SaveSystem.SaveManager.Instance;
+            if (saveMgr != null)
+                saveMgr.Save(slot);
+
+            // Load entry module
+            LoadModule(string.IsNullOrEmpty(entryModule) ? "001EBO" : entryModule);
         }
 
         // ── GAME STATE CONTROL ─────────────────────────────────────────────────

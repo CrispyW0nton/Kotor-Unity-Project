@@ -98,7 +98,8 @@ namespace KotORUnity.Abilities
             SpawnCastVFX(caster.transform.position);
             if (castSound != null) _audioSource.PlayOneShot(castSound);
 
-            EventBus.Publish(EventBus.EventType.AbilityUsed);
+            EventBus.Publish(EventBus.EventType.AbilityUsed,
+                new EventBus.AbilityEventArgs(caster, target, abilityName, mode));
         }
 
         // ── MODE-SPECIFIC EXECUTION ────────────────────────────────────────────
