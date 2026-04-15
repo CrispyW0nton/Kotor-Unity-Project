@@ -80,6 +80,8 @@ namespace KotORUnity.KotOR.Parsers
         public class GffField
         {
             public GffFieldType Type;
+            /// <summary>Alias for Type — used by systems that prefer the verbose name.</summary>
+            public GffFieldType FieldType => Type;
             public string Label;
             public object Value;  // boxed value
 
@@ -385,6 +387,78 @@ namespace KotORUnity.KotOR.Parsers
         {
             if (s == null || !s.Fields.ContainsKey(key)) return Vector3.zero;
             return s.Fields[key].AsVector();
+        }
+
+        public static GffStruct GetStruct(GffStruct s, string key)
+        {
+            if (s == null || !s.Fields.ContainsKey(key)) return null;
+            return s.Fields[key].AsStruct();
+        }
+
+        public static List<GffStruct> GetList(GffStruct s, string key)
+        {
+            if (s == null || !s.Fields.ContainsKey(key)) return new List<GffStruct>();
+            return s.Fields[key].AsList() ?? new List<GffStruct>();
+        }
+
+        /// <summary>Read an int field and treat non-zero as true.</summary>
+        public static bool GetBool(GffStruct s, string key, bool defaultVal = false)
+        {
+            if (s == null || !s.Fields.ContainsKey(key)) return defaultVal;
+            return s.Fields[key].AsInt() != 0;
+        }
+
+        // ── UTI / GFF type aliases ─────────────────────────────────────────────
+        // These map BioWare field type names to the underlying scalar accessors.
+
+        /// <summary>CExoString field → string.</summary>
+        public static string GetCExoString(GffStruct s, string key, string def = "")
+            => GetString(s, key, def);
+
+        /// <summary>CResRef field → string (resrefs are stored as CExoString in UTIs).</summary>
+        public static string GetCResRef(GffStruct s, string key, string def = "")
+            => GetString(s, key, def);
+
+        /// <summary>CExoLocString → English text (strref index 0).</summary>
+        public static string GetLocString(GffStruct s, string key, string def = "")
+            => GetString(s, key, def);
+
+        /// <summary>DWORD field → uint (stored as int in our GFF reader).</summary>
+        public static uint GetDword(GffStruct s, string key, uint def = 0)
+        {
+            if (s == null || !s.Fields.ContainsKey(key)) return def;
+            int v = s.Fields[key].AsInt();
+            return v < 0 ? (uint)v : (uint)v;
+        }
+
+        /// <summary>WORD field → ushort.</summary>
+        public static ushort GetWord(GffStruct s, string key, ushort def = 0)
+        {
+            if (s == null || !s.Fields.ContainsKey(key)) return def;
+            return (ushort)s.Fields[key].AsInt();
+        }
+
+        /// <summary>BYTE field → byte.</summary>
+        public static byte GetByte(GffStruct s, string key, byte def = 0)
+        {
+            if (s == null || !s.Fields.ContainsKey(key)) return def;
+            return (byte)s.Fields[key].AsInt();
+        }
+
+        /// <summary>Alias for <see cref="Parse"/> for callers that use "Read" convention.</summary>
+        public static GffStruct Read(byte[] data) => Parse(data);
+    }
+
+    // ── EXTENSION: GffStruct.GetField helper ──────────────────────────────────
+    // Allows callers to write:  struct.GetField("FieldName")?.AsList()
+    // without going through the static GffReader helpers.
+    public static class GffStructExtensions
+    {
+        public static GffReader.GffField GetField(this GffReader.GffStruct s, string key)
+        {
+            if (s == null) return null;
+            s.Fields.TryGetValue(key, out var f);
+            return f;
         }
     }
 }

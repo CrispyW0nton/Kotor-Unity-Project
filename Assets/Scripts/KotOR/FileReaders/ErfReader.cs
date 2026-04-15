@@ -160,4 +160,192 @@ namespace KotORUnity.KotOR.FileReaders
             return null;
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  ERF WRITER  —  creates KotOR-compatible ERF/MOD/SAV binary archives
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Writes a BioWare ERF binary archive from a list of in-memory resources.
+    ///
+    /// ERF Binary Layout (little-endian):
+    ///   Header   (160 bytes)
+    ///     char[4]  FileType        e.g. "MOD " or "ERF "
+    ///     char[4]  Version         "V1.0"
+    ///     uint32   LanguageCount   (0 for mod archives)
+    ///     uint32   LocalisedStringSize
+    ///     uint32   EntryCount
+    ///     uint32   OffsetToLocalizedStrings
+    ///     uint32   OffsetToKeyList
+    ///     uint32   OffsetToResourceList
+    ///     uint32   BuildYear       (years since 1900)
+    ///     uint32   BuildDay        (0-based day of year)
+    ///     bytes[116] DescriptionStrRef + reserved
+    ///   Key Table  (entry × 24 bytes)
+    ///     char[16] ResRef
+    ///     uint32   ResourceID
+    ///     uint16   ResourceType
+    ///     uint16   Unused
+    ///   Resource Table  (entry × 8 bytes)
+    ///     uint32   OffsetToResource
+    ///     uint32   ResourceSize
+    ///   Resource Data blocks (concatenated)
+    /// </summary>
+    public static class ErfWriter
+    {
+        // Common ERF resource type codes (matching those in ErfReader / ResourceType enum)
+        public static readonly Dictionary<string, ushort> ExtToType =
+            new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase)
+        {
+            { ".res",   0x0000 }, { ".bmp",   0x0001 }, { ".tga",   0x000F },
+            { ".wav",   0x0011 }, { ".ini",   0x0018 }, { ".txt",   0x000A },
+            { ".mdl",   0x07D0 }, { ".nss",   0x07D2 }, { ".ncs",   0x07D3 },
+            { ".mod",   0x07D4 }, { ".are",   0x07D5 }, { ".set",   0x07D6 },
+            { ".ifo",   0x07D7 }, { ".bic",   0x07D8 }, { ".wok",   0x07D9 },
+            { ".2da",   0x07DA }, { ".tlk",   0x07DB }, { ".txi",   0x07DC },
+            { ".git",   0x07DD }, { ".bti",   0x07DF }, { ".uti",   0x07E6 },
+            { ".btc",   0x07E7 }, { ".utc",   0x07E8 }, { ".dlg",   0x07ED },
+            { ".itp",   0x07EE }, { ".btt",   0x07EF }, { ".utt",   0x07F0 },
+            { ".dds",   0x07F1 }, { ".uts",   0x07F3 }, { ".ltr",   0x07F4 },
+            { ".gff",   0x07F5 }, { ".fac",   0x07F6 }, { ".bte",   0x07F7 },
+            { ".ute",   0x07F8 }, { ".btd",   0x07F9 }, { ".utd",   0x07FA },
+            { ".btp",   0x07FB }, { ".utp",   0x07FC }, { ".dft",   0x07FD },
+            { ".gic",   0x07FE }, { ".gui",   0x07FF }, { ".css",   0x0800 },
+            { ".ccs",   0x0801 }, { ".btm",   0x0802 }, { ".utm",   0x0803 },
+            { ".dwk",   0x0804 }, { ".pwk",   0x0805 }, { ".btg",   0x0806 },
+            { ".utg",   0x0807 }, { ".jrl",   0x0808 }, { ".sav",   0x0809 },
+            { ".utw",   0x080A }, { ".4pc",   0x080B }, { ".ssf",   0x080C },
+            { ".hak",   0x080D }, { ".nwm",   0x080E }, { ".bik",   0x080F },
+            { ".lip",   0x0816 }, { ".mdx",   0x07D1 },
+        };
+
+        /// <summary>A single resource to pack into the archive.</summary>
+        public class ErfResource
+        {
+            public string ResRef;   // max 16 chars, no extension
+            public ushort ResType;  // from ExtToType
+            public byte[] Data;
+
+            public ErfResource(string resRef, ushort resType, byte[] data)
+            {
+                ResRef  = resRef?.Length > 16 ? resRef.Substring(0, 16) : resRef ?? "";
+                ResType = resType;
+                Data    = data ?? Array.Empty<byte>();
+            }
+
+            public ErfResource(string resRef, string extension, byte[] data)
+                : this(resRef,
+                       ExtToType.TryGetValue(extension, out ushort t) ? t : (ushort)0x0000,
+                       data) { }
+        }
+
+        /// <summary>
+        /// Write an ERF/MOD archive to a byte array.
+        /// fileType should be "MOD " (4 chars) for module files, "ERF " for generic.
+        /// </summary>
+        public static byte[] Write(IList<ErfResource> resources,
+                                   string fileType = "MOD ")
+        {
+            if (resources == null) resources = new List<ErfResource>();
+
+            // Pad/truncate fileType to exactly 4 bytes
+            string ft  = (fileType + "    ").Substring(0, 4);
+
+            int entryCount = resources.Count;
+
+            // ── Compute offsets ───────────────────────────────────────────────
+            const int HEADER_SIZE   = 160;
+            const int KEY_ENTRY_SZ  = 24;
+            const int RES_ENTRY_SZ  = 8;
+
+            int offsetToLocalStrings = HEADER_SIZE;
+            int offsetToKeyList      = offsetToLocalStrings; // no language strings
+            int offsetToResList      = offsetToKeyList + entryCount * KEY_ENTRY_SZ;
+            int offsetToData         = offsetToResList + entryCount * RES_ENTRY_SZ;
+
+            // Compute individual data offsets
+            var dataOffsets = new int[entryCount];
+            int cursor = offsetToData;
+            for (int i = 0; i < entryCount; i++)
+            {
+                dataOffsets[i] = cursor;
+                cursor += resources[i].Data.Length;
+            }
+
+            // ── Build binary ──────────────────────────────────────────────────
+            using var ms = new MemoryStream(cursor + 64);
+            using var bw = new BinaryWriter(ms, Encoding.ASCII);
+
+            // Header (160 bytes)
+            WriteFixedString(bw, ft,     4);       // FileType
+            WriteFixedString(bw, "V1.0", 4);       // Version
+            bw.Write((uint)0);                     // LanguageCount
+            bw.Write((uint)0);                     // LocalisedStringSize
+            bw.Write((uint)entryCount);             // EntryCount
+            bw.Write((uint)offsetToLocalStrings);   // OffsetToLocalizedStrings
+            bw.Write((uint)offsetToKeyList);        // OffsetToKeyList
+            bw.Write((uint)offsetToResList);        // OffsetToResourceList
+            bw.Write((uint)(DateTime.UtcNow.Year - 1900)); // BuildYear
+            bw.Write((uint)DateTime.UtcNow.DayOfYear);     // BuildDay
+            bw.Write((uint)0xFFFFFFFF);             // DescriptionStrRef (-1 = none)
+            bw.Write(new byte[116]);                // Reserved
+
+            // Key table (entryCount × 24 bytes)
+            for (int i = 0; i < entryCount; i++)
+            {
+                var r = resources[i];
+                WriteFixedString(bw, r.ResRef, 16); // ResRef (16 bytes)
+                bw.Write((uint)i);                  // ResourceID
+                bw.Write(r.ResType);                // ResourceType
+                bw.Write((ushort)0);                // Unused
+            }
+
+            // Resource list (entryCount × 8 bytes)
+            for (int i = 0; i < entryCount; i++)
+            {
+                bw.Write((uint)dataOffsets[i]);            // OffsetToResource
+                bw.Write((uint)resources[i].Data.Length);  // ResourceSize
+            }
+
+            // Resource data blocks
+            foreach (var r in resources)
+                bw.Write(r.Data);
+
+            return ms.ToArray();
+        }
+
+        /// <summary>
+        /// Build an ERF/MOD archive from a folder of files.
+        /// All files in the folder (non-recursive) are included.
+        /// </summary>
+        public static byte[] WriteFromFolder(string folderPath, string fileType = "MOD ")
+        {
+            if (!Directory.Exists(folderPath))
+                throw new DirectoryNotFoundException($"[ErfWriter] Folder not found: {folderPath}");
+
+            var resources = new List<ErfResource>();
+            foreach (string file in Directory.GetFiles(folderPath))
+            {
+                string ext    = Path.GetExtension(file).ToLowerInvariant();
+                string resRef = Path.GetFileNameWithoutExtension(file);
+                if (resRef.Length > 16) resRef = resRef.Substring(0, 16);
+                byte[] data   = File.ReadAllBytes(file);
+                resources.Add(new ErfResource(resRef, ext, data));
+            }
+
+            Debug.Log($"[ErfWriter] Packing {resources.Count} files from '{folderPath}'.");
+            return Write(resources, fileType);
+        }
+
+        private static void WriteFixedString(BinaryWriter bw, string s, int length)
+        {
+            var bytes = new byte[length];
+            if (!string.IsNullOrEmpty(s))
+            {
+                var src = Encoding.ASCII.GetBytes(s);
+                Array.Copy(src, bytes, Math.Min(src.Length, length));
+            }
+            bw.Write(bytes);
+        }
+    }
 }

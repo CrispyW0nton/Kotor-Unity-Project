@@ -64,7 +64,7 @@ namespace KotORUnity.Weapons
 
         // ── PROPERTIES ─────────────────────────────────────────────────────────
         public string WeaponName => weaponName;
-        public WeaponType WeaponType => weaponType;
+        public WeaponType WeaponCategory => weaponType;   // renamed: avoids CS0102 clash with the WeaponType enum
         public int Tier => tier;
         public int CurrentAmmo => currentAmmo;
         public int MaxAmmo => maxAmmo;

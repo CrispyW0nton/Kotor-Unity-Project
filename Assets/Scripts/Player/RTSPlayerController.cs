@@ -34,7 +34,7 @@ namespace KotORUnity.Player
         [SerializeField] private List<CompanionAI> squadMembers = new List<CompanionAI>();
 
         // ── STATE ──────────────────────────────────────────────────────────────
-        private Camera _rtsCamera;
+        private UnityEngine.Camera _rtsCamera;
         private GameObject _selectedUnit;
         private CompanionAI _selectedCompanion;
         private Formation _currentFormation = Formation.Spread;
@@ -217,8 +217,9 @@ namespace KotORUnity.Player
             if (args is EventBus.ModeSwitchEventArgs switchArgs && switchArgs.NewMode == GameMode.RTS)
             {
                 // Find the RTS camera when entering RTS mode
-                _rtsCamera = GameObject.FindWithTag("RTSCamera")?.GetComponent<Camera>()
-                    ?? Camera.main;
+                var rtsCamGO = TagHelper.FindWithTag("RTSCamera");
+                _rtsCamera = rtsCamGO?.GetComponent<UnityEngine.Camera>()
+                    ?? UnityEngine.Camera.main;
             }
         }
 

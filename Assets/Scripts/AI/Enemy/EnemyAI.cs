@@ -6,6 +6,7 @@ using KotORUnity.Player;
 using KotORUnity.Combat;
 using KotORUnity.Weapons;
 using static KotORUnity.Core.GameEnums;
+#pragma warning disable 0414, 0219
 
 namespace KotORUnity.AI.Enemy
 {
@@ -31,6 +32,7 @@ namespace KotORUnity.AI.Enemy
         [SerializeField] private EnemyType enemyType = EnemyType.Ranged;
         [SerializeField] private int level = 1;
         [SerializeField] private int encounterIndex = 0;
+        [SerializeField] private string factionId = "enemy_default";
 
         [Header("Detection")]
         [SerializeField] private float detectionRadius = 15f;
@@ -423,9 +425,64 @@ namespace KotORUnity.AI.Enemy
         }
 
         // ── PUBLIC ACCESSORS ───────────────────────────────────────────────────
-        public EnemyAIState CurrentState => _currentState;
-        public EnemyType EnemyType => enemyType;
-        public int AdaptationStacks => _adaptationStacks;
-        public PlayerStats Stats => _stats;
+        public EnemyAIState CurrentState    => _currentState;
+        public EnemyType    EnemyType       => enemyType;
+        public int          AdaptationStacks=> _adaptationStacks;
+        public PlayerStats  Stats           => _stats;
+
+        /// <summary>Stun this enemy for <paramref name="duration"/> seconds (Force Stasis).</summary>
+        public void Stun(float duration)
+        {
+            StopAllCoroutines();
+            _currentState = EnemyAIState.Idle;
+            StartCoroutine(StunRoutine(duration));
+        }
+
+        private System.Collections.IEnumerator StunRoutine(float duration)
+        {
+            var nav = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (nav != null) nav.isStopped = true;
+            yield return new WaitForSeconds(duration);
+            if (nav != null) nav.isStopped = false;
+            _currentState = EnemyAIState.Patrol;
+        }
+
+        // ── FACTION API ────────────────────────────────────────────────────────
+
+        /// <summary>Inspector-assigned faction identifier (e.g. "sith", "republic").</summary>
+        public string FactionId => factionId;
+
+        private Encounter.FactionRelation _factionRelationOverride = Encounter.FactionRelation.Hostile;
+        private bool _factionOverrideActive = false;
+
+        /// <summary>
+        /// Override this enemy's relation to the player for the duration of an encounter.
+        /// Called by EncounterManager when faction overrides are in effect.
+        /// </summary>
+        public void SetFactionRelation(Encounter.FactionRelation relation)
+        {
+            _factionRelationOverride  = relation;
+            _factionOverrideActive    = true;
+
+            // If turned Friendly or Neutral, exit combat immediately
+            if (relation != Encounter.FactionRelation.Hostile)
+            {
+                _currentState = EnemyAIState.Idle;
+                var nav = GetComponent<UnityEngine.AI.NavMeshAgent>();
+                if (nav != null) nav.isStopped = true;
+                Debug.Log($"[EnemyAI] {enemyName} faction set to {relation} — standing down.");
+            }
+        }
+
+        /// <summary>Remove a previously applied faction override, restoring default Hostile behaviour.</summary>
+        public void ResetFactionRelation()
+        {
+            _factionOverrideActive = false;
+            _factionRelationOverride = Encounter.FactionRelation.Hostile;
+        }
+
+        /// <summary>Returns true if this enemy will attack the player in its current faction state.</summary>
+        public bool IsHostileToPlayer =>
+            !_factionOverrideActive || _factionRelationOverride == Encounter.FactionRelation.Hostile;
     }
 }

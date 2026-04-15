@@ -23,6 +23,14 @@ namespace KotORUnity.Player
         [SerializeField] private float experience = 0f;
         [SerializeField] private float xpToNextLevel = 1000f;
 
+        [Header("Ability Scores (D&D / KotOR)")]
+        [SerializeField] private int strength     = 10;
+        [SerializeField] private int dexterity    = 10;
+        [SerializeField] private int constitution = 10;
+        [SerializeField] private int intelligence = 10;
+        [SerializeField] private int wisdom       = 10;
+        [SerializeField] private int charisma     = 10;
+
         [Header("Combat Stats")]
         [SerializeField] private float maxHealth = 125f;
         [SerializeField] private float currentHealth = 125f;
@@ -62,6 +70,92 @@ namespace KotORUnity.Player
         public float ActionCombatTimeTotal => actionCombatTimeTotal;
         public bool IsAlive => currentHealth > 0f;
 
+        // ── ABILITY SCORE PROPERTIES ───────────────────────────────────────────
+        public int Strength
+        {
+            get => strength;
+            set => strength = Mathf.Clamp(value, 3, 30);
+        }
+        public int Dexterity
+        {
+            get => dexterity;
+            set => dexterity = Mathf.Clamp(value, 3, 30);
+        }
+        public int Constitution
+        {
+            get => constitution;
+            set => constitution = Mathf.Clamp(value, 3, 30);
+        }
+        public int Intelligence
+        {
+            get => intelligence;
+            set => intelligence = Mathf.Clamp(value, 3, 30);
+        }
+        public int Wisdom
+        {
+            get => wisdom;
+            set => wisdom = Mathf.Clamp(value, 3, 30);
+        }
+        public int Charisma
+        {
+            get => charisma;
+            set => charisma = Mathf.Clamp(value, 3, 30);
+        }
+
+        /// <summary>Standard D&D ability modifier: (score - 10) / 2 (floor).</summary>
+        public int AbilityModifier(int score) => Mathf.FloorToInt((score - 10) / 2f);
+
+        public int MaxHP => (int)maxHealth;
+
+        // ── DERIVED STATS FOR UI ───────────────────────────────────────────────
+        /// <summary>Armour class = 10 + DEX modifier + equipped armour AC bonus.</summary>
+        public int ArmorClass
+        {
+            get
+            {
+                int ac = 10 + AbilityModifier(dexterity);
+                // Add body armour AC if equipped
+                var inv = KotORUnity.Inventory.InventoryManager.Instance?.PlayerInventory;
+                if (inv != null)
+                {
+                    var body = inv.GetEquipped(KotORUnity.Inventory.EquipSlot.Body);
+                    if (body != null)
+                    {
+                        int dexCap = Mathf.Min(AbilityModifier(dexterity), body.MaxDexBonus);
+                        ac = 10 + dexCap + body.ACBonus;
+                    }
+                }
+                return ac;
+            }
+        }
+
+        /// <summary>Fortitude save = CON modifier + level / 3.</summary>
+        public int FortSave  => AbilityModifier(constitution) + Mathf.FloorToInt(level / 3f);
+        /// <summary>Reflex save = DEX modifier + level / 4.</summary>
+        public int RefSave   => AbilityModifier(dexterity)    + Mathf.FloorToInt(level / 4f);
+        /// <summary>Will save = WIS modifier + level / 4.</summary>
+        public int WillSave  => AbilityModifier(wisdom)       + Mathf.FloorToInt(level / 4f);
+
+        /// <summary>Human-readable damage bonus for the main-hand weapon.</summary>
+        public string DamageBonusText
+        {
+            get
+            {
+                var inv = KotORUnity.Inventory.InventoryManager.Instance?.PlayerInventory;
+                if (inv != null)
+                {
+                    var wp = inv.GetEquipped(KotORUnity.Inventory.EquipSlot.WeaponR);
+                    if (wp != null)
+                        return $"{wp.DamageNumDice}d{wp.DamageDie}+{wp.DamageBonus + AbilityModifier(strength)}";
+                }
+                // Unarmed
+                return $"1d4+{AbilityModifier(strength)}";
+            }
+        }
+
+        /// <summary>Class + level display string, e.g. "Jedi Guardian 5".</summary>
+        public string ClassLevelDisplay => $"Level {level}";
+
         // ── INITIALIZATION ─────────────────────────────────────────────────────
         public PlayerStats() { }
 
@@ -89,6 +183,30 @@ namespace KotORUnity.Player
             xpToNextLevel = 1000f * level;
 
             Debug.Log($"[PlayerStats] {characterName} set to level {level}, HP: {maxHealth}");
+        }
+
+        /// <summary>
+        /// Recalculate maxHealth and attackBonus after ability scores change.
+        /// Call this after setting Strength/Constitution from a NewGameConfig.
+        /// KotOR formula: HP = BASE_HEALTH + HEALTH_PER_LEVEL × level + CON_modifier × level
+        /// </summary>
+        public void RecalculateDerivedStats()
+        {
+            int conMod = AbilityModifier(constitution);
+            maxHealth  = GameConstants.BASE_HEALTH
+                       + GameConstants.HEALTH_PER_LEVEL * level
+                       + conMod * level;
+            maxHealth  = Mathf.Max(maxHealth, 1f);
+            currentHealth = maxHealth;
+
+            // STR modifier feeds melee attack bonus
+            attackBonus = AbilityModifier(strength);
+
+            // DEX modifier feeds defense rating
+            defenseRating = AbilityModifier(dexterity);
+
+            Debug.Log($"[PlayerStats] Recalculated: {characterName} " +
+                      $"HP={maxHealth}  ATK={attackBonus}  DEF={defenseRating}");
         }
 
         /// <summary>Add experience and check for level up.</summary>
@@ -151,6 +269,58 @@ namespace KotORUnity.Player
             OnHealthChanged?.Invoke(currentHealth, maxHealth);
         }
 
+        /// <summary>Set the maximum health value (used by NWScriptVM and dev console).</summary>
+        public void SetMaxHealth(int newMax)
+        {
+            maxHealth = Mathf.Max(1f, newMax);
+            currentHealth = Mathf.Min(currentHealth, maxHealth);
+            OnHealthChanged?.Invoke(currentHealth, maxHealth);
+        }
+
+        /// <summary>
+        /// Scale max and current health by <paramref name="multiplier"/>.
+        /// Used by EncounterManager to buff later-wave enemies.
+        /// </summary>
+        public void ScaleHealth(float multiplier)
+        {
+            multiplier  = Mathf.Max(0.01f, multiplier);
+            float ratio = (maxHealth > 0f) ? currentHealth / maxHealth : 1f;
+            maxHealth     = maxHealth * multiplier;
+            currentHealth = maxHealth * ratio;
+            OnHealthChanged?.Invoke(currentHealth, maxHealth);
+        }
+
+        /// <summary>
+        /// Directly set the raw experience value (NWScript SetXP command).
+        /// Does NOT trigger level-ups — use AddExperience for that.
+        /// </summary>
+        public void SetExperience(float value)
+        {
+            experience = Mathf.Max(0f, value);
+        }
+
+        /// <summary>Set the character's display name (from Character Creation).</summary>
+        public void SetCharacterName(string name)
+        {
+            if (!string.IsNullOrWhiteSpace(name))
+                characterName = name.Trim();
+        }
+
+        /// <summary>
+        /// Batch-set all six D&amp;D ability scores (from Character Creation point-buy).
+        /// Triggers a full stat recalculation.
+        /// </summary>
+        public void SetAbilityScores(int str, int dex, int con, int intel, int wis, int cha)
+        {
+            strength     = Mathf.Clamp(str,   3, 20);
+            dexterity    = Mathf.Clamp(dex,   3, 20);
+            constitution = Mathf.Clamp(con,   3, 20);
+            intelligence = Mathf.Clamp(intel, 3, 20);
+            wisdom       = Mathf.Clamp(wis,   3, 20);
+            charisma     = Mathf.Clamp(cha,   3, 20);
+            RecalculateDerivedStats();
+        }
+
         /// <summary>Restore shield (capped at max shield).</summary>
         public void RestoreShield(float amount)
         {
@@ -158,11 +328,35 @@ namespace KotORUnity.Player
             OnShieldChanged?.Invoke(currentShield, maxShield);
         }
 
+        // ── TEMPORARY BUFFS ───────────────────────────────────────────────────
+
+        private int   _tempAttackBonus;
+        private float _tempAttackBonusExpiry;
+
+        /// <summary>Add a timed attack bonus (Force Valor, etc.).</summary>
+        public void AddTemporaryAttackBonus(int bonus, float duration)
+        {
+            _tempAttackBonus       += bonus;
+            _tempAttackBonusExpiry = UnityEngine.Time.time + duration;
+        }
+
+        /// <summary>Returns current effective attack bonus (including temporary).</summary>
+        public int EffectiveAttackBonus(int baseBonus)
+        {
+            if (_tempAttackBonusExpiry > 0f && UnityEngine.Time.time < _tempAttackBonusExpiry)
+                return baseBonus + _tempAttackBonus;
+            _tempAttackBonus = 0;
+            _tempAttackBonusExpiry = 0f;
+            return baseBonus;
+        }
+
         private void Die()
         {
             currentHealth = 0f;
             OnDied?.Invoke();
-            EventBus.Publish(EventBus.EventType.PlayerDied);
+            // NOTE: EventBus.PlayerDied is intentionally NOT published here.
+            // PlayerStatsBehaviour.OnCharacterDied() handles it so only actual
+            // player-tagged GameObjects raise the PlayerDied bus event.
         }
 
         // ── DAMAGE CALCULATION ─────────────────────────────────────────────────

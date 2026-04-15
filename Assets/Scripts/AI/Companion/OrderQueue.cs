@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using UnityEngine;
 using KotORUnity.Abilities;
+using KotORUnity.Core;
 using static KotORUnity.Core.GameEnums;
+#pragma warning disable 0414, 0219
 
 namespace KotORUnity.AI.Companion
 {

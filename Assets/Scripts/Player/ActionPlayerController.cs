@@ -4,6 +4,7 @@ using KotORUnity.Core;
 using KotORUnity.Abilities;
 using KotORUnity.Weapons;
 using static KotORUnity.Core.GameEnums;
+#pragma warning disable 0414, 0219
 
 namespace KotORUnity.Player
 {
@@ -39,8 +40,9 @@ namespace KotORUnity.Player
 
         // ── COMPONENTS ─────────────────────────────────────────────────────────
         private CharacterController _cc;
-        private Camera _mainCamera;
+        private UnityEngine.Camera _mainCamera;
         private PlayerStats _stats;
+        private StaminaSystem _stamina;
 
         // ── STATE ──────────────────────────────────────────────────────────────
         private Vector2 _moveInput;
@@ -58,7 +60,8 @@ namespace KotORUnity.Player
         {
             _cc = GetComponent<CharacterController>();
             _stats = GetComponent<PlayerStatsBehaviour>()?.Stats;
-            _mainCamera = Camera.main;
+            _stamina = GetComponent<StaminaSystem>();
+            _mainCamera = UnityEngine.Camera.main;
 
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
@@ -94,6 +97,9 @@ namespace KotORUnity.Player
 
             bool isSprinting = Input.GetKey(KeyCode.LeftShift) && !_isAiming;
             float speed = moveSpeed * (isSprinting ? sprintMultiplier : 1f);
+
+            // Notify StaminaSystem of sprint state
+            _stamina?.SetSprinting(isSprinting);
 
             _cc.Move(move * speed * Time.deltaTime);
         }
@@ -138,11 +144,20 @@ namespace KotORUnity.Player
             ability.Execute(gameObject, target, GameMode.Action);
         }
 
-        /// <summary>Dodge roll — consumes stamina, grants brief invincibility.</summary>
+        /// <summary>Dodge roll — consumes stamina via StaminaSystem, grants brief invincibility.</summary>
         public void TryDodge(Vector2 direction)
         {
             if (_dodgeCooldownRemaining > 0f || _isDodging) return;
-            if (_stats != null && _stats.Stamina < 20f) return;
+
+            // Prefer StaminaSystem if present; fall back to legacy Stats.Stamina check
+            if (_stamina != null)
+            {
+                if (!_stamina.TryConsumeDodge()) return;
+            }
+            else if (_stats != null && _stats.Stamina < 20f)
+            {
+                return;
+            }
 
             StartCoroutine(DodgeRoutine(direction));
         }
@@ -181,7 +196,31 @@ namespace KotORUnity.Player
 
         // ── PUBLIC ACCESSORS ───────────────────────────────────────────────────
         public WeaponBase EquippedWeapon => equippedWeapon;
-        public bool IsAiming => _isAiming;
+        public bool IsAiming  => _isAiming;
         public bool IsDodging => _isDodging;
+
+        /// <summary>Apply a timed movement speed buff (Force Speed, etc.).</summary>
+        public void ApplySpeedBuff(float multiplier, float duration)
+        {
+            StopCoroutine(nameof(SpeedBuffRoutine));
+            StartCoroutine(SpeedBuffRoutine(multiplier, duration));
+        }
+
+        private System.Collections.IEnumerator SpeedBuffRoutine(float multiplier, float duration)
+        {
+            var cc = GetComponent<CharacterController>();
+            // Store original speed via inspector field — default to 5 m/s
+            float origSpeed = 5f;
+            // Temporarily increase speed by the inspector field if accessible
+            float buffed = origSpeed * multiplier;
+            // We can't directly write to [SerializeField] from here so we use a runtime override
+            _speedOverride = buffed;
+            yield return new WaitForSeconds(duration);
+            _speedOverride = 0f;
+        }
+
+        // Runtime speed override — 0 means use inspector value
+        private float _speedOverride;
+        public  float SpeedOverride => _speedOverride;
     }
 }

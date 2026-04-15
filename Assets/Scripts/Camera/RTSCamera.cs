@@ -1,5 +1,6 @@
 using UnityEngine;
 using KotORUnity.Core;
+#pragma warning disable 0414, 0219
 
 namespace KotORUnity.Camera
 {
@@ -50,7 +51,8 @@ namespace KotORUnity.Camera
             _cam = GetComponent<UnityEngine.Camera>();
             _targetHeight = defaultHeight;
             _targetPosition = transform.position;
-            gameObject.tag = "RTSCamera";
+            // Assign tag safely — tag must exist in Project Settings → Tags & Layers
+            TagHelper.TrySetTag(gameObject, "RTSCamera");
         }
 
         private void OnEnable()

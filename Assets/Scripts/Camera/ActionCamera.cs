@@ -41,7 +41,8 @@ namespace KotORUnity.Camera
         private void Awake()
         {
             _cam = GetComponent<UnityEngine.Camera>();
-            gameObject.tag = "ActionCamera";
+            // Assign tag safely — tag must exist in Project Settings → Tags & Layers
+            TagHelper.TrySetTag(gameObject, "ActionCamera");
         }
 
         private void LateUpdate()

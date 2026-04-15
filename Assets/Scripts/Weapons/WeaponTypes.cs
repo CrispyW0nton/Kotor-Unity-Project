@@ -1,5 +1,7 @@
 using UnityEngine;
 using KotORUnity.Weapons;
+using KotORUnity.Combat;
+using KotORUnity.Core;
 using static KotORUnity.Core.GameEnums;
 
 namespace KotORUnity.Weapons
@@ -181,5 +183,187 @@ namespace KotORUnity.Weapons
                 }
             }
         }
+    }
+
+    // ── LIGHTSABER ─────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Lightsaber — the iconic Jedi/Sith melee weapon.
+    ///
+    /// Action Mode:
+    ///   Swing: arc-sweep OverlapSphere dealing high melee damage.
+    ///   Block:  When IsBlocking is true, incoming hitscan rays that hit the
+    ///           lightsaber collider are reflected back at the shooter.
+    ///
+    /// RTS Mode:
+    ///   Highest DPS_RTS of any melee weapon (AI chains strikes continuously).
+    ///   Automatically enters block stance when no enemies are in swing range,
+    ///   reducing incoming ranged damage by 50%.
+    ///
+    /// Design doc note:
+    ///   "High DPS_RTS — AI continuous strikes; Action Mode: timing-based parry
+    ///    combo grants full damage on perfect parry, 50% on late parry."
+    /// </summary>
+    public class Lightsaber : WeaponBase
+    {
+        [Header("Lightsaber Config")]
+        [SerializeField] private float meleeRange = 2.5f;
+        [SerializeField] private float meleeArc = 120f;           // wider arc than Vibroblade
+        [SerializeField] private float blockDamageReduction = 0.50f; // 50% damage reduction while blocking
+        [SerializeField] private float perfectParryWindow = 0.15f;   // seconds to get perfect timing
+        [SerializeField] private GameObject bladeObject;             // The blade mesh (for enable/disable)
+        [SerializeField] private AudioClip igniteSound;
+        [SerializeField] private AudioClip humLoop;
+        [SerializeField] private AudioClip clashSound;
+
+        // ── STATE ──────────────────────────────────────────────────────────────
+        private bool _isBlocking = false;
+        private bool _isPerfectParryWindow = false;
+        private float _parryWindowTimer = 0f;
+        private AudioSource _humSource;
+
+        // ── AWAKE ──────────────────────────────────────────────────────────────
+        protected override void Awake()
+        {
+            base.Awake();
+            weaponName = "Lightsaber";
+            weaponType = WeaponType.Lightsaber;
+            baseDamageAction = 30f;   // Per swing
+            baseDPSRTS = 22f;         // Highest melee DPS_RTS
+            fireRate = 0.4f;
+            range = meleeRange;
+            maxAmmo = int.MaxValue;
+            currentAmmo = int.MaxValue;
+
+            // Set up hum audio source
+            _humSource = gameObject.AddComponent<AudioSource>();
+            _humSource.clip = humLoop;
+            _humSource.loop = true;
+            _humSource.volume = 0.3f;
+            _humSource.spatialBlend = 1f;
+        }
+
+        private void OnEnable()
+        {
+            if (igniteSound != null) _audioSource?.PlayOneShot(igniteSound);
+            if (humLoop != null) _humSource?.Play();
+        }
+
+        private void OnDisable()
+        {
+            _humSource?.Stop();
+        }
+
+        // ── FIRE (SWING) ───────────────────────────────────────────────────────
+        protected override void ExecuteFire(Transform fireOrigin, bool isAiming)
+        {
+            // Arc sweep — hit all enemies within meleeArc
+            Collider[] hits = Physics.OverlapSphere(fireOrigin.position, meleeRange);
+            foreach (var hit in hits)
+            {
+                if (hit.gameObject == gameObject || hit.gameObject == fireOrigin.gameObject)
+                    continue;
+
+                Vector3 dirToTarget = (hit.transform.position - fireOrigin.position).normalized;
+                float angle = Vector3.Angle(fireOrigin.forward, dirToTarget);
+
+                if (angle <= meleeArc / 2f)
+                {
+                    // Perfect parry reward — does not apply to attacks, only to timing
+                    // Clash detection (lightsaber vs lightsaber) plays clash sound
+                    var targetWeapon = hit.GetComponent<Lightsaber>();
+                    if (targetWeapon != null && targetWeapon.IsBlocking)
+                    {
+                        if (clashSound != null) _audioSource.PlayOneShot(clashSound);
+                        continue; // Blocked
+                    }
+
+                    HitscanFire(fireOrigin, isAiming, out _, out _, out _);
+                }
+            }
+        }
+
+        // ── BLOCK ──────────────────────────────────────────────────────────────
+        /// <summary>
+        /// Enter block stance. While blocking, incoming damage is reduced by 50%.
+        /// Perfect parry window opens for perfectParryWindow seconds after block starts.
+        /// </summary>
+        public void StartBlock()
+        {
+            _isBlocking = true;
+            _isPerfectParryWindow = true;
+            _parryWindowTimer = perfectParryWindow;
+        }
+
+        /// <summary>End block stance.</summary>
+        public void EndBlock()
+        {
+            _isBlocking = false;
+            _isPerfectParryWindow = false;
+        }
+
+        private void Update()
+        {
+            if (_isPerfectParryWindow)
+            {
+                _parryWindowTimer -= Time.deltaTime;
+                if (_parryWindowTimer <= 0f)
+                    _isPerfectParryWindow = false;
+            }
+        }
+
+        // ── INCOMING DAMAGE MODIFIER ───────────────────────────────────────────
+        /// <summary>
+        /// Returns a damage multiplier to apply to incoming damage.
+        /// Called by DamageSystem when this character is the target.
+        ///   Perfect Parry: 0% damage (full block) + riposte bonus
+        ///   Normal Block:  50% damage
+        ///   Not Blocking:  100% damage
+        /// </summary>
+        public float GetIncomingDamageMultiplier(out bool isPerfectParry)
+        {
+            isPerfectParry = false;
+            if (!_isBlocking) return 1f;
+            if (_isPerfectParryWindow)
+            {
+                isPerfectParry = true;
+                return 0f; // Full block — zero damage
+            }
+            return 1f - blockDamageReduction;
+        }
+
+        // ── RTS AUTO-ATTACK OVERRIDE ───────────────────────────────────────────
+        public override void RTSAttackTick(GameObject target, float deltaTime)
+        {
+            if (!IsReady || target == null || _ownerStats == null) return;
+
+            var targetStats = target.GetComponent<Player.PlayerStatsBehaviour>()?.Stats;
+            if (targetStats == null) return;
+
+            float dist = Vector3.Distance(transform.position, target.transform.position);
+
+            // Auto-block if no enemy in range
+            if (dist > meleeRange)
+            {
+                _isBlocking = true;
+                // Close the gap
+                var agent = GetComponentInParent<UnityEngine.AI.NavMeshAgent>();
+                agent?.SetDestination(target.transform.position);
+                return;
+            }
+
+            _isBlocking = false;
+
+            var (isHit, damage, hitType, _) = CombatResolver.ResolveRTSAttack(
+                DPSRTS, deltaTime, _ownerStats, targetStats);
+
+            if (isHit)
+                DamageSystem.ApplyDamage(gameObject, target, damage, DamageType.Physical, hitType, GameMode.RTS);
+
+            _nextFireTime = Time.time + fireRate;
+        }
+
+        // ── PROPERTIES ─────────────────────────────────────────────────────────
+        public bool IsBlocking => _isBlocking;
+        public bool IsPerfectParryWindow => _isPerfectParryWindow;
     }
 }

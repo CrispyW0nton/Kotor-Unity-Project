@@ -7,6 +7,7 @@ using KotORUnity.Core;
 using KotORUnity.KotOR.FileReaders;
 using KotORUnity.KotOR.Parsers;
 using static KotORUnity.Core.GameEnums;
+#pragma warning disable 0414, 0219
 
 namespace KotORUnity.KotOR.Modules
 {
@@ -60,6 +61,9 @@ namespace KotORUnity.KotOR.Modules
     /// </summary>
     public class ModuleLoader : MonoBehaviour
     {
+        // ── SINGLETON ─────────────────────────────────────────────────────────
+        public static ModuleLoader Instance { get; private set; }
+
         // ── CONFIG ─────────────────────────────────────────────────────────────
         private string _kotorDir;
         private TargetGame _targetGame;
@@ -78,7 +82,17 @@ namespace KotORUnity.KotOR.Modules
         private List<ModuleEntityInstance> _currentEntities;
         private AudioSource _ambientMusicSource;
 
-        // ── INITIALIZATION ─────────────────────────────────────────────────────
+        // ── UNITY LIFECYCLE ───────────────────────────────────────────────────
+        private void Awake()
+        {
+            if (Instance == null) Instance = this;
+            else Destroy(gameObject);
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+        }
         public void Initialize(string kotorDir, TargetGame targetGame)
         {
             _kotorDir = kotorDir;
@@ -121,8 +135,8 @@ namespace KotORUnity.KotOR.Modules
                     : new List<RimReader.RimResourceEntry>();
 
                 // 2. Load module info (IFO)
-                var ifoEntry = RimReader.FindResource(rimEntries, "module", ResourceType.IFO)
-                    ?? RimReader.FindResource(rimSEntries, "module", ResourceType.IFO);
+                var ifoEntry = RimReader.FindResource(rimEntries, "module", (uint)ResourceType.IFO)
+                    ?? RimReader.FindResource(rimSEntries, "module", (uint)ResourceType.IFO);
 
                 if (ifoEntry != null)
                 {
@@ -133,7 +147,7 @@ namespace KotORUnity.KotOR.Modules
 
                 // 3. Load layout (LYT)
                 string moduleLower = moduleName.ToLower();
-                var lytEntry = RimReader.FindResource(rimEntries, moduleLower, ResourceType.LYT);
+                var lytEntry = RimReader.FindResource(rimEntries, moduleLower, (uint)ResourceType.LYT);
                 if (lytEntry != null)
                 {
                     byte[] lytData = RimReader.ReadResource(lytEntry);
@@ -142,7 +156,7 @@ namespace KotORUnity.KotOR.Modules
                 }
 
                 // 4. Load area (ARE)
-                var areEntry = RimReader.FindResource(rimEntries, moduleLower, ResourceType.ARE);
+                var areEntry = RimReader.FindResource(rimEntries, moduleLower, (uint)ResourceType.ARE);
                 if (areEntry != null)
                 {
                     byte[] areData = RimReader.ReadResource(areEntry);
@@ -151,8 +165,8 @@ namespace KotORUnity.KotOR.Modules
                 }
 
                 // 5. Load instances (GIT)
-                var gitEntry = RimReader.FindResource(rimEntries, moduleLower, (ushort)2023)
-                    ?? RimReader.FindResource(rimSEntries, moduleLower, (ushort)2023);
+                var gitEntry = RimReader.FindResource(rimEntries, moduleLower, (uint)ResourceType.GIT)
+                    ?? RimReader.FindResource(rimSEntries, moduleLower, (uint)ResourceType.GIT);
                 if (gitEntry != null)
                 {
                     byte[] gitData = RimReader.ReadResource(gitEntry);
@@ -383,7 +397,8 @@ namespace KotORUnity.KotOR.Modules
         }
 
         // ── PUBLIC API ─────────────────────────────────────────────────────────
-        public string CurrentModule => _currentModule;
+        public string CurrentModule     => _currentModule;
+        public string CurrentModuleName => _currentModule; // alias for SaveManager
         public ModuleLayout CurrentLayout => _currentLayout;
     }
 
